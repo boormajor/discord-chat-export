@@ -125,4 +125,10 @@ MIT License. See [LICENSE](LICENSE). Discord and its marks belong to their respe
 
 ---
 
-**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.0 (prototype; live Discord compatibility unverified)
+**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.1 (layout fix; live Discord compatibility unverified)
+
+## v2.1 layout fix
+
+Fixed a rendering bug in grouped Discord messages: when the compact timestamp column was hidden, message text and attachments moved into the 72px-wide column, causing one-word-per-line wrapping and broken alignment. Grouped messages now always occupy the correct chat content column. Sticker previews are limited to 128px, normal images to 320×250px, and videos to 350×250px. The archive header is also more compact.
+
+**How to fix an existing export:** Reload the extension at `chrome://extensions`, refresh your open Discord DM, and export HTML again. **You do not have to recapture the whole conversation.** Stored records and JSON are preserved. The fix applies to newly exported HTML, not HTML files already saved on disk.
