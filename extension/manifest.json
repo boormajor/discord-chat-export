@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "DM Archive — Discord-style export",
-  "version": "2.0.0",
-  "description": "Locally archive an open Discord DM using visible messages, optional automatic scrolling, and playable media exports. No account tokens.",
+  "version": "2.1.0",
+  "description": "Locally export Discord DMs with fixed grouped-message layout, compact media and ZIP backups. No tokens.",
   "permissions": [
     "storage",
     "unlimitedStorage"
