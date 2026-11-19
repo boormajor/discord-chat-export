@@ -1,0 +1,9 @@
+# Personal message archives; never publish these
+discord-dm-*.html
+discord-dm-*.json
+discord-dm-*.txt
+discord-dm-*.zip
+media/
+.DS_Store
+Thumbs.db
+node_modules/
