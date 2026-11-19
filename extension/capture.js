@@ -50,7 +50,7 @@
    const s=safe(a.getAttribute('href'));if(s&&/discordapp\.(com|net)/.test(new URL(s).hostname)&&/\/(?:ephemeral-)?attachments\//.test(s))add(s,'',{name:a.getAttribute('download')||''});
   }
   for(const img of el.querySelectorAll('img[src],img[srcset]')){
-   if(img.closest('h3,[class*="reaction"],[id^="message-username"]'))continue;
+   if(img.closest('h3,[class*="avatar"],[class*="Avatar"],[class*="reaction"],[id^="message-username"]'))continue;
    const s=safe(img.currentSrc||img.getAttribute('src'));
    if(!s||/\/avatars\/|\/embed\/avatars\//.test(s))continue;
    const sticker=!!img.closest('[class*="sticker"],[class*="Sticker"]');
