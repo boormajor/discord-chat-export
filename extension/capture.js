@@ -9,7 +9,9 @@
  const autoKey='dm-archive-v2:auto-dm',prefix='dm-archive-v2:messages:';
  const state={id:null,loaded:false,records:new Map(),running:false,phase:'idle',progress:'',
    dirty:false,saveChain:Promise.resolve(),saveTimer:null,scrollTimer:null,scanTimer:null,observer:null,
-   topTicks:0,topId:null,noScroll:0,exporting:false,mediaSaved:0,mediaFailed:0,title:null};
+   topTicks:0,topId:null,noScroll:0,exporting:false,mediaSaved:0,mediaFailed:0,title:null,
+   seenRows:new WeakMap(),dirtyRows:new WeakSet(),cachedScroller:null,topSince:0,stallRetries:0,nudgePending:false,
+   tallyDirty:true,cachedMedia:0,cachedUnknown:0};
  let booting=false;
  const id=()=>location.pathname.match(dmPath)?.[1]||null;
  const storeKey=x=>prefix+x;
@@ -76,47 +78,120 @@
   let lastName=null,lastAvatar=null,changed=false;const seen=new Set();
   for(const el of document.querySelectorAll(selector)){
    const mid=messageId(el);if(!mid||seen.has(mid))continue;seen.add(mid);
+   const old=state.records.get(mid);
+   // Processing the same unchanged row repeatedly is expensive, especially with thousands of messages.
+   if(old&&state.seenRows.get(el)===mid&&!state.dirtyRows.has(el)){
+    if(old.authorSource==='header'){lastName=old.author;lastAvatar=old.avatar}
+    continue;
+   }
    const direct=author(el);
    if(direct){lastName=direct;lastAvatar=avatar(el)}
-   const old=state.records.get(mid);
-   const newName=direct||lastName||old?.author||null;
-   const rec={id:mid,author:newName,avatar:(direct?avatar(el):(lastName?lastAvatar:null))||old?.avatar||null,
+   const newName=direct||old?.author||lastName||null;
+   const rec={id:mid,author:newName,
+    avatar:(direct?avatar(el):old?.avatar||(lastName?lastAvatar:null))||null,
     authorSource:direct?'header':old?.authorSource||(lastName?'visible-context':'unknown'),
     timestamp:time(el,mid)||old?.timestamp||null,
     content:body(el)||old?.content||'',
     media:mergeMedia(old?.media||[],media(el)),
     links:[...new Set([...(old?.links||[]),...links(el)])]};
-   if(old?.authorSource==='header'&&!direct&&!lastName){rec.author=old.author;rec.authorSource='header'}
+   if(old?.authorSource==='header'&&!direct){rec.author=old.author;rec.authorSource='header'}
+   state.seenRows.set(el,mid);state.dirtyRows.delete(el);
    if(!old||JSON.stringify(old)!==JSON.stringify(rec)){state.records.set(mid,rec);changed=true}
   }
-  if(changed){state.dirty=true;scheduleSave()}
+  if(changed){state.dirty=true;state.tallyDirty=true;scheduleSave()}
  }
- function scheduleScan(){if(!state.running||state.scanTimer)return;state.scanTimer=setTimeout(()=>{state.scanTimer=null;scan()},150)}
- function observe(){if(state.observer||!document.body)return;state.observer=new MutationObserver(scheduleScan);state.observer.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['src','href']})}
- function teardown(){if(state.scrollTimer)clearInterval(state.scrollTimer);if(state.scanTimer)clearTimeout(state.scanTimer);state.scrollTimer=state.scanTimer=null;state.observer?.disconnect();state.observer=null;state.running=false}
+ function scheduleScan(){if(!state.running||state.scanTimer)return;state.scanTimer=setTimeout(()=>{state.scanTimer=null;scan()},180)}
+ function observe(){
+  if(state.observer||!document.body)return;
+  state.observer=new MutationObserver(mutations=>{
+   let relevant=false;
+   for(const m of mutations){
+    const node=m.target?.nodeType===1?m.target:m.target?.parentElement;
+    const row=node?.closest?.(selector);
+    if(row){state.dirtyRows.add(row);relevant=true;continue}
+    if(m.type==='childList'){
+     for(const added of m.addedNodes){
+      if(added.nodeType!==1)continue;
+      if(added.matches?.(selector)){state.dirtyRows.add(added);relevant=true;break}
+      if(added.querySelector?.(selector)){relevant=true;break}
+     }
+    }
+   }
+   if(relevant)scheduleScan();
+  });
+  state.observer.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['src','href']})
+ }
+ function teardown(){if(state.scrollTimer)clearTimeout(state.scrollTimer);if(state.scanTimer)clearTimeout(state.scanTimer);state.scrollTimer=state.scanTimer=null;state.observer?.disconnect();state.observer=null;state.running=false}
  function scrollBox(){
-  const row=document.querySelector(selector);if(!row)return null;const choices=[];
+  if(state.cachedScroller?.isConnected)return state.cachedScroller;
+  const row=document.querySelector(selector);if(!row)return null;
+  let selected=null,score=-1;
   for(let p=row.parentElement;p&&p!==document.body;p=p.parentElement){
-   if(p.scrollHeight>p.clientHeight+60&&p.clientHeight>150){const overflow=getComputedStyle(p).overflowY;choices.push({node:p,score:/auto|scroll/.test(overflow)?10:0})}
+   if(p.scrollHeight>p.clientHeight+60&&p.clientHeight>150){
+    const priority=/auto|scroll/.test(getComputedStyle(p).overflowY)?10:0;
+    if(priority>score){selected=p;score=priority}
+   }
   }
-  return choices.sort((a,b)=>b.score-a.score)[0]?.node||null;
+  state.cachedScroller=selected;
+  return selected
  }
  function oldest(){let out=null;for(const k of state.records.keys())if(!out||BigInt(k)<BigInt(out))out=k;return out}
- function finish(reason){scan();teardown();state.phase='complete';state.progress=reason;state.dirty=true;scheduleSave()}
+ function finish(reason,phase='stalled'){
+  scan();teardown();state.phase=phase;state.progress=reason;state.dirty=true;scheduleSave()
+ }
+ function scheduleScroll(delay=450){
+  if(!state.running)return;
+  state.scrollTimer=setTimeout(()=>{
+   state.scrollTimer=null;
+   const next=scroll();
+   if(state.running)scheduleScroll(next);
+  },delay)
+ }
  function scroll(){
-  if(!state.running||state.id!==id()){teardown();return}scan();
+  if(!state.running||state.id!==id()){teardown();return 0}
+  scan();
   const scroller=scrollBox();
-  if(!scroller){state.noScroll++;state.progress='Waiting for Discord to load the message list…';if(state.noScroll>=20)finish('Message scroller not detected. Retry or scroll manually.');return}
-  state.noScroll=0;const first=oldest();
-  if(scroller.scrollTop<=3){
-   if(first&&state.topId!==first){state.topId=first;state.topTicks=0}else state.topTicks++;
-   state.progress='Checking oldest loaded messages… '+state.topTicks+'/12';
-   if(state.topTicks>=12){finish('Reached apparent beginning of the loaded history. Verify the oldest message and gaps.');return}
-   scroller.scrollTop=0;return;
+  if(!scroller){
+   state.noScroll++;state.progress='Waiting for Discord to render messages…';
+   if(state.noScroll>=30)finish('Discord did not render the message scroller. Refresh this DM to resume.');
+   return 1150
   }
-  state.topId=first;state.topTicks=0;
-  scroller.scrollTop=Math.max(0,scroller.scrollTop-Math.max(250,Math.min(650,Math.floor(scroller.clientHeight*.75))));
-  state.progress='Scrolling upward · '+state.records.size.toLocaleString()+' messages observed';
+  state.noScroll=0;
+  const first=oldest();
+  if(first&&first!==state.topId){
+   state.topId=first;state.topSince=Date.now();state.stallRetries=0
+  }
+  if(state.nudgePending){
+   state.nudgePending=false;scroller.scrollTop=0;
+   state.progress='Retrying older-message loading…';
+   return 950
+  }
+  if(scroller.scrollTop<=3){
+   if(!state.topSince)state.topSince=Date.now();
+   const elapsed=Date.now()-state.topSince;
+   if(elapsed>=12000){
+    state.stallRetries++;
+    if(state.stallRetries>=3){
+     finish('Discord has not loaded older messages after several retries. Your capture is saved. Refresh this DM to resume automatically.');
+     return 0
+    }
+    scroller.scrollTop=Math.min(
+     Math.max(0,scroller.scrollHeight-scroller.clientHeight),
+     Math.max(100,Math.floor(scroller.clientHeight*.25))
+    );
+    state.topSince=Date.now();state.nudgePending=true;
+    state.progress='Discord is slow. Retrying history load ('+state.stallRetries+'/3)…';
+    return 800
+   }
+   scroller.scrollTop=0;
+   state.progress='Waiting for older messages from Discord · '+Math.round(elapsed/1000)+'s';
+   return 950
+  }
+  state.topSince=0;
+  const step=Math.max(140,Math.min(520,Math.floor(scroller.clientHeight*.45)));
+  scroller.scrollTop=Math.max(0,scroller.scrollTop-step);
+  state.progress='Capturing older messages · '+state.records.size.toLocaleString()+' saved';
+  return document.hidden?900:450
  }
  async function save(){
   if(!state.dirty||!state.id||!state.loaded)return;state.dirty=false;
@@ -124,11 +199,12 @@
   state.saveChain=state.saveChain.catch(()=>{}).then(()=>chrome.storage.local.set({[key]:payload})).catch(e=>{state.progress='Storage error: '+e.message;state.dirty=true});
   await state.saveChain;
  }
- function scheduleSave(){if(state.saveTimer)return;state.saveTimer=setTimeout(()=>{state.saveTimer=null;void save()},1600)}
+ function scheduleSave(){if(state.saveTimer)return;state.saveTimer=setTimeout(()=>{state.saveTimer=null;void save()},8000)}
  async function load(next){
   if(next===state.id&&state.loaded)return;
   if(state.id&&state.dirty)await save();
   teardown();state.id=next;state.loaded=false;state.records.clear();state.phase='idle';state.progress='';state.title=null;state.topTicks=0;
+  state.cachedScroller=null;state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();state.tallyDirty=true;state.topSince=0;state.stallRetries=0;state.nudgePending=false;
   const prior=(await chrome.storage.local.get(storeKey(next)))[storeKey(next)];
   if(state.id!==next)return;
   if(Array.isArray(prior?.messages))for(const m of prior.messages)if(m?.id){
@@ -141,16 +217,22 @@
   const next=id();if(!next)return {ok:false,error:'Open a Discord DM first.'};await load(next);
   if(persist)await chrome.storage.local.set({[autoKey]:next});
   teardown();state.phase='scrolling';state.running=true;state.topTicks=0;state.noScroll=0;state.topId=null;
+  state.cachedScroller=null;state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();state.topSince=0;state.stallRetries=0;state.nudgePending=false;
   state.title ||= document.querySelector('main [class*="title"]')?.textContent?.trim()?.slice(0,150)||null;
-  state.progress='Starting automatic upward capture…';observe();scan();state.scrollTimer=setInterval(scroll,1150);scroll();return status();
+  state.progress='Starting automatic upward capture…';observe();scan();scheduleScroll(100);return status();
  }
  async function pause(){if(state.running)scan();teardown();state.phase='paused';state.progress='Paused; captured messages remain saved.';await chrome.storage.local.remove(autoKey);await save();return status()}
- async function clear(){await pause();const next=id();if(!next)return {ok:false,error:'Open a Discord DM first.'};state.records.clear();state.dirty=false;state.phase='idle';state.progress='Local archive cleared.';await chrome.storage.local.remove(storeKey(next));return status()}
+ async function clear(){await pause();const next=id();if(!next)return {ok:false,error:'Open a Discord DM first.'};state.records.clear();state.dirty=false;state.phase='idle';state.tallyDirty=true;state.progress='Local archive cleared.';await chrome.storage.local.remove(storeKey(next));return status()}
  function status(){
-  const same=state.id===id()&&state.loaded,rows=same?[...state.records.values()]:[];
-  return {ok:true,dmId:id()||'none',running:same&&state.running,phase:same?state.phase:'idle',total:rows.length,
-   mediaCount:rows.reduce((n,m)=>n+(m.media?.length||0),0),unknownAuthors:rows.filter(m=>!m.author).length,
-   progress:same?state.progress:'Open a Discord DM.',exporting:state.exporting,mediaSaved:state.mediaSaved,mediaFailed:state.mediaFailed};
+  const same=state.id===id()&&state.loaded;
+  if(state.tallyDirty){
+   let media=0,unknown=0;
+   for(const m of state.records.values()){media+=m.media?.length||0;if(!m.author)unknown++}
+   state.cachedMedia=media;state.cachedUnknown=unknown;state.tallyDirty=false
+  }
+  return {ok:true,dmId:id()||'none',running:same&&state.running,phase:same?state.phase:'idle',
+   total:same?state.records.size:0,mediaCount:same?state.cachedMedia:0,unknownAuthors:same?state.cachedUnknown:0,
+   progress:same?state.progress:'Open a Discord DM.',exporting:state.exporting,mediaSaved:state.mediaSaved,mediaFailed:state.mediaFailed}
  }
  function snapshot(){return {schema:'dm-archive-v2',dmId:state.id,title:state.title,exportedAt:new Date().toISOString(),
   scope:'messages observed in the rendered DM',messages:[...state.records.values()].sort((a,b)=>BigInt(a.id)<BigInt(b.id)?-1:BigInt(a.id)>BigInt(b.id)?1:0)}}
@@ -233,12 +315,12 @@
    const prev=state.records.get(m.id);
    state.records.set(m.id,prev?{...m,...prev,media:mergeMedia(m.media,prev.media)}:m);
   }
-  state.dirty=true;await save();return {...status(),note:'Imported JSON messages.'};
+  state.dirty=true;state.tallyDirty=true;await save();return {...status(),note:'Imported JSON messages.'};
  }
  async function reconcile(){
   if(booting)return;const next=id();if(!next){if(state.running)teardown();return}booting=true;
   try{if(state.id!==next||!state.loaded)await load(next);
-   if(state.id!==next||state.running||state.phase==='paused'||state.phase==='complete')return;
+   if(state.id!==next||state.running||state.phase==='paused'||state.phase==='complete'||state.phase==='stalled')return;
    if((await chrome.storage.local.get(autoKey))[autoKey]===next)await start(false);
   }catch(e){state.progress='Initialization error: '+e.message}finally{booting=false}
  }
