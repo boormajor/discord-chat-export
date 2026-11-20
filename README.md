@@ -125,7 +125,7 @@ MIT License. See [LICENSE](LICENSE). Discord and its marks belong to their respe
 
 ---
 
-**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.4 (blocked-message reveal fix; live Discord compatibility unverified)
+**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.5 (verification audit; live Discord compatibility unverified)
 
 ## v2.1 layout fix
 
@@ -158,3 +158,22 @@ When messages from a blocked user appear as collapsed **“1 blocked message —
 Discord may render the entire `1 blocked message — Show` banner as a single clickable element, rather than a separate Show button. v2.4 detects full banners and nested Show controls. **Reveal visible blocked messages now** in the popup lets you test detection while viewing an affected DM. It reports how many controls were found or clicked. Auto capture also tries to reveal them before moving further up the page. This does not unblock users or recover deleted content. Live Discord support remains unverified; you may still need to click Show manually if Discord's structure differs.
 
 Before updating, export a JSON backup and **Reload** the existing extension rather than uninstalling it.
+
+## v2.5: Two-pass archive verification (200-message batches)
+
+**Problem:** 12,000 messages in a 4 MB file is not evidence that the full conversation was captured. Discord Web may not load older messages, may skip rows during virtualization, or may leave blocked groups collapsed.
+
+**How to use:**
+
+1. Save your existing **JSON** export as a backup. Do not remove the installed extension or clear its storage.
+2. Capture the DM normally. If capture stalls, do **not** assume the history is complete.
+3. Click **Verify archive (second pass)** in the popup. The extension snapshots the currently archived message IDs and goes toward older messages, then back toward newer ones while re-reading the visible rows. It attempts to expand blocked-message groups if that setting is enabled.
+4. The audit compares the second-pass observations with the original set in **batches of 200 message IDs**. Newly observed messages are merged into the archive. The process can be interrupted with **Pause**; that produces an incomplete-pass result.
+5. Click **Report JSON** to download a verification report. Check the verdict, per-batch `rechecked` and `notRechecked` counts, `unrecheckedIdsSample`, `newlyRecovered`, `unknownAuthors`, `emptyPayload`, and whether the apparent top and bottom of history were reached.
+6. Export updated **HTML / JSON / ZIP** after the verification pass to include recovered messages.
+
+**What is verified:** existing captured IDs seen again, field inconsistencies, newly recovered messages, empty payloads, unknown authors, and per-batch coverage. The report distinguishes `incomplete-pass`, `needs-review` and `observed-records-rechecked`.
+
+**What cannot be proved:** whether Discord delivered every server-side message, whether inaccessible/deleted messages existed, or whether a numerical gap between Snowflake IDs implies a missing message. A completed verification certifies only the *observed* records and is not evidence of a perfectly complete chat export. Some old IDs may not be reobserved due to Discord load stalls; review those batches. A media link being present does not guarantee its file remains downloadable. The two-pass mode uses the normal visible conversation and does not access the Discord API, tokens or cookies.
+
+**Compatibility:** static JavaScript tests are run, but live Discord Web history traversal remains unverified. Browser tab must remain open; Discord may throttle rendering. After upgrading, replace the existing extension files and click **Reload**. Do not uninstall if you want to retain browser-local message storage.
