@@ -1,5 +1,5 @@
 'use strict';
-const els=Object.fromEntries(['status','dot','count','mediaCount','details','progress','start','pause','zip','html','json','txt','import','importFile','clear'].map(id=>[id,document.getElementById(id)]));
+const els=Object.fromEntries(['status','dot','count','mediaCount','details','progress','start','pause','zip','html','json','txt','import','importFile','clear','revealBlocked'].map(id=>[id,document.getElementById(id)]));
 let lastResult=null;
 async function send(type,extra={}) {
   const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
@@ -10,6 +10,7 @@ function setNotice(note){if(note)els.progress.textContent=note;}
 function render(s){
   if(!s?.ok)throw new Error(s?.error||'Unknown error');
   lastResult=s;
+  els.revealBlocked.checked=s.revealBlocked!==false;
   els.status.textContent=s.exporting?'Saving media ZIP…':s.running?'Auto-capturing':s.phase==='complete'?'Capture finished':s.phase==='paused'?'Paused':s.phase==='stalled'?'Capture stalled':'Ready';
   els.dot.className='dot'+(s.running?' active':s.phase==='complete'?' complete':s.phase==='paused'?' paused':'');
   els.count.textContent=Number(s.total||0).toLocaleString();
@@ -39,6 +40,7 @@ async function doAction(type,extra={}){
 }
 els.start.addEventListener('click',()=>doAction('START'));
 els.pause.addEventListener('click',()=>doAction('PAUSE'));
+els.revealBlocked.addEventListener('change',()=>doAction('SET_REVEAL',{enabled:els.revealBlocked.checked}));
 els.clear.addEventListener('click',()=>{if(confirm('Delete captured messages for this DM from extension storage?'))void doAction('CLEAR');});
 for(const format of ['html','json','txt','zip'])els[format].addEventListener('click',()=>doAction('EXPORT',{format}));
 els.import.addEventListener('click',()=>els.importFile.click());
