@@ -10,13 +10,13 @@ function setNotice(note){if(note)els.progress.textContent=note;}
 function render(s){
   if(!s?.ok)throw new Error(s?.error||'Unknown error');
   lastResult=s;
-  els.status.textContent=s.exporting?'Saving media ZIP…':s.running?'Auto-capturing':s.phase==='complete'?'Capture finished':s.phase==='paused'?'Paused':'Ready';
+  els.status.textContent=s.exporting?'Saving media ZIP…':s.running?'Auto-capturing':s.phase==='complete'?'Capture finished':s.phase==='paused'?'Paused':s.phase==='stalled'?'Capture stalled':'Ready';
   els.dot.className='dot'+(s.running?' active':s.phase==='complete'?' complete':s.phase==='paused'?' paused':'');
   els.count.textContent=Number(s.total||0).toLocaleString();
   els.mediaCount.textContent=Number(s.mediaCount||0).toLocaleString();
   els.details.textContent='DM: '+s.dmId+' · '+(s.unknownAuthors||0)+' missing author labels';
   els.progress.textContent=s.progress||'Start auto capture and the page will scroll through the conversation.';
-  els.start.textContent=s.running?'Auto-capturing…':s.phase==='complete'?'Scan again':s.phase==='paused'?'Resume auto capture':'Start auto capture';
+  els.start.textContent=s.running?'Auto-capturing…':s.phase==='complete'?'Scan again':s.phase==='paused'?'Resume auto capture':s.phase==='stalled'?'Retry capture':'Start auto capture';
   els.start.disabled=!!s.running||!!s.exporting;
   els.pause.disabled=!s.running;
   for(const key of ['zip','html','json','txt'])els[key].disabled=!s.total||!!s.exporting;
