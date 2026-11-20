@@ -1,13 +1,17 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DM Archive</title><link rel="stylesheet" href="popup.css"></head>
 <body><main>
-  <header><span class="logo">◈</span><div><h1>DM Archive</h1><p>Discord-style conversations &amp; media</p></div><span class="version">v2.4</span></header>
+  <header><span class="logo">◈</span><div><h1>DM Archive</h1><p>Discord-style conversations &amp; media</p></div><span class="version">v2.5</span></header>
   <section class="stats" aria-live="polite"><div class="state-line"><span class="dot" id="dot"></span><strong id="status">Connecting…</strong></div><div class="bigrow"><div><span id="count">0</span><small>messages</small></div><div><span id="mediaCount">0</span><small>media items</small></div></div><div class="channel" id="details">Open a Discord DM in your browser.</div></section>
   <div class="progress" id="progress">Start capture in a DM, then the extension scrolls upward for you.</div>
   <div class="controls"><button class="primary" id="start">Start auto capture</button><button class="outline" id="pause" disabled>Pause</button></div>
   <label class="reveal-toggle"><input type="checkbox" id="revealBlocked" checked> Automatically show blocked messages while capturing</label>
   <button class="reveal-now" id="revealNow">Reveal visible blocked messages now</button>
   <p class="helper">Start once for a DM. After reloading that DM, auto-capture resumes. Keep the Discord tab open while it scrolls.</p>
+  <div class="divider"></div>
+  <h2>Verify captured history</h2>
+  <div class="controls"><button class="primary" id="verify" disabled>Verify archive (second pass)</button><button class="outline" id="verifyReport" disabled>Report JSON</button></div>
+  <p class="helper" id="verifySummary">Revisit the chat and recheck archived message IDs in batches of 200. Cannot prove inaccessible messages do not exist.</p>
   <div class="divider"></div>
   <h2>Export conversation</h2>
   <button class="mediazip" id="zip" disabled><span class="download-ico">↓</span><span><b>HTML + offline media ZIP</b><small>Local images, GIFs, videos &amp; audio when available</small></span></button>
