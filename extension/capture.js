@@ -12,7 +12,8 @@
    topTicks:0,topId:null,noScroll:0,exporting:false,mediaSaved:0,mediaFailed:0,title:null,
    seenRows:new WeakMap(),dirtyRows:new WeakSet(),cachedScroller:null,topSince:0,stallRetries:0,nudgePending:false,
    tallyDirty:true,cachedMedia:0,cachedUnknown:0,
-   revealBlocked:true,revealClicks:0,revealFound:0,revealAttempts:new WeakMap(),revealPauseUntil:0};
+   revealBlocked:true,revealClicks:0,revealFound:0,revealAttempts:new WeakMap(),revealPauseUntil:0,
+    verify:null,verifyReport:null};
  let booting=false;
  const id=()=>location.pathname.match(dmPath)?.[1]||null;
  const storeKey=x=>prefix+x;
@@ -79,6 +80,7 @@
   let lastName=null,lastAvatar=null,changed=false;const seen=new Set();
   for(const el of document.querySelectorAll(selector)){
    const mid=messageId(el);if(!mid||seen.has(mid))continue;seen.add(mid);
+   if(state.verify?.active)state.verify.seen.add(mid);
    const old=state.records.get(mid);
    // Processing the same unchanged row repeatedly is expensive, especially with thousands of messages.
    if(old&&state.seenRows.get(el)===mid&&!state.dirtyRows.has(el)){
@@ -97,7 +99,10 @@
     links:[...new Set([...(old?.links||[]),...links(el)])]};
    if(old?.authorSource==='header'&&!direct){rec.author=old.author;rec.authorSource='header'}
    state.seenRows.set(el,mid);state.dirtyRows.delete(el);
-   if(!old||JSON.stringify(old)!==JSON.stringify(rec)){state.records.set(mid,rec);changed=true}
+   if(!old||JSON.stringify(old)!==JSON.stringify(rec)){
+    if(state.verify?.active&&old&&old.author!==rec.author&&rec.author)state.verify.fieldChanges++;
+    state.records.set(mid,rec);changed=true
+   }
   }
   if(changed){state.dirty=true;state.tallyDirty=true;scheduleSave()}
  }
@@ -193,11 +198,122 @@
   }
   return {found:banners.size,clicked}
  }
+ function verificationReport(endObserved=false){
+   const v=state.verify;
+   if(!v)return state.verifyReport;
+   return DmAudit.report([...state.records.values()],v.baseline,v.seen,{
+     startObserved:v.topObserved,endObserved,fieldChanges:v.fieldChanges,
+     collapsedBlockedGroups:v.collapsedBlockedGroups
+   });
+ }
+ function finishVerification(reason,finished=false){
+   if(!state.verify)return;
+   if(state.running)scan();
+   const v=state.verify;
+   v.active=false;
+   state.verifyReport=verificationReport(finished&&v.bottomObserved);
+   teardown();
+   state.phase=finished?'verified':'verify-stalled';
+   state.progress=reason+' · '+state.verifyReport.secondPassRechecked+'/'+state.verifyReport.initialCount+' original messages rechecked · '+state.verifyReport.newlyRecovered+' newly found.';
+   state.dirty=true;scheduleSave();
+ }
+ function verificationStep(){
+   const v=state.verify;
+   if(!v?.active||state.id!==id()){teardown();return 0}
+   scan();
+   const scroller=scrollBox();
+   if(!scroller){v.noScroller++;if(v.noScroller>30)finishVerification('Verification stopped: message scroller not found');return 1000}
+   v.noScroller=0;
+   if(state.revealBlocked){
+     const reveal=revealBlockedMessageGroups();
+     if(reveal.found>reveal.clicked)v.collapsedBlockedGroups=Math.max(v.collapsedBlockedGroups,reveal.found-reveal.clicked);
+     if(reveal.clicked)return 1200;
+   }
+   if(Date.now()<state.revealPauseUntil)return 350;
+   const current=oldest();
+   const nearTop=scroller.scrollTop<=3;
+   const nearBottom=scroller.scrollTop+scroller.clientHeight>=scroller.scrollHeight-5;
+   const move=Math.max(170,Math.min(420,Math.floor(scroller.clientHeight*.4)));
+   const now=Date.now();
+   if(v.phase==='up'){
+     if(current&&current!==v.lastOldest){v.lastOldest=current;v.lastProgress=now;v.retries=0}
+     if(nearTop){
+       if(now-v.lastProgress>11000){
+         if(v.retries>=2){
+           v.topObserved=true;v.phase='down';v.lastProgress=now;v.lastScroll=null;
+           state.progress='Verification second pass: checking newer messages';
+           return 700
+         }
+         v.retries++;v.lastProgress=now;
+         scroller.scrollTop=Math.min(scroller.scrollHeight-scroller.clientHeight,Math.max(100,scroller.clientHeight*.2));
+         state.progress='Verification: retrying older history '+v.retries+'/2';
+         return 850
+       }
+       state.progress='Verification: waiting for older messages · '+v.seen.size+' rows re-observed';
+       return 900
+     }
+     scroller.scrollTop=Math.max(0,scroller.scrollTop-move);
+     state.progress='Verification: scanning toward oldest messages · '+v.seen.size+' rows observed';
+     return document.hidden?950:560
+   }
+   if(v.phase==='down'){
+     const position=scroller.scrollTop,atEnd=nearBottom;
+     if(v.lastScroll===null||Math.abs(position-v.lastScroll)>4){
+       v.lastScroll=position;v.lastProgress=now;v.retries=0
+     }
+     if(atEnd){
+       if(now-v.lastProgress>=8000){
+         v.bottomObserved=true;
+         finishVerification('Second pass finished at apparent latest messages',true);
+         return 0
+       }
+       state.progress='Verification: checking latest messages · '+v.seen.size+' rows re-observed';
+       return 900
+     }
+     if(now-v.lastProgress>17000){
+       v.retries++;
+       if(v.retries>=3){finishVerification('Verification stopped: scrolling stalled before the latest messages');return 0}
+       v.lastProgress=now;scroller.scrollTop=Math.max(0,scroller.scrollTop-150);
+       state.progress='Verification: retrying stalled scroll ('+v.retries+'/3)';
+       return 800
+     }
+     scroller.scrollTop=Math.min(scroller.scrollHeight-scroller.clientHeight,position+move);
+     state.progress='Verification: checking batches of 200 · '+v.seen.size+' observed';
+     return document.hidden?950:560
+   }
+   return 1000
+ }
+ async function startVerification(){
+   const dm=id();if(!dm)return {ok:false,error:'Open a DM first.'};
+   await load(dm);
+   if(!state.records.size)return {ok:false,error:'Capture messages before verifying.'};
+   if(state.exporting)return {ok:false,error:'Finish exporting media first.'};
+   if(state.running){scan();teardown()}
+   await chrome.storage.local.remove(autoKey);
+   const baseline=DmAudit.baseline([...state.records.values()]);
+   state.verify={active:true,phase:'up',baseline,seen:new Set(),fieldChanges:0,
+     collapsedBlockedGroups:0,topObserved:false,bottomObserved:false,
+     noScroller:0,lastOldest:null,lastScroll:null,lastProgress:Date.now(),retries:0};
+   state.verifyReport=null;
+   state.phase='verifying';state.running=true;state.cachedScroller=null;
+   state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();
+   state.revealAttempts=new WeakMap();state.revealPauseUntil=0;
+   state.progress='Verification started: '+baseline.length+' saved messages in '+Math.ceil(baseline.length/200)+' audit batches. Scanning older history first.';
+   observe();scan();scheduleScroll(150);
+   return status()
+ }
+ function exportVerification(){
+   const v=state.verify;
+   const report=v?.active?verificationReport(false):state.verifyReport;
+   if(!report)return {ok:false,error:'Run Verify archive first.'};
+   download(filename()+'-verification.json',JSON.stringify({...report,dmId:state.id},null,2),'application/json;charset=utf-8');
+   return {...status(),note:'Verification report downloaded. See batch statuses and unrechecked IDs.'}
+ }
  function scheduleScroll(delay=450){
   if(!state.running)return;
   state.scrollTimer=setTimeout(()=>{
    state.scrollTimer=null;
-   const next=scroll();
+   const next=state.verify?.active?verificationStep():scroll();
    if(state.running)scheduleScroll(next);
   },delay)
  }
@@ -263,6 +379,7 @@
   state.cachedScroller=null;state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();state.tallyDirty=true;state.topSince=0;state.stallRetries=0;state.nudgePending=false;
   state.revealAttempts=new WeakMap();state.revealPauseUntil=0;
   state.revealBlocked=(await chrome.storage.local.get(revealKey))[revealKey]!==false;
+  state.verify=null;state.verifyReport=null;
   const prior=(await chrome.storage.local.get(storeKey(next)))[storeKey(next)];
   if(state.id!==next)return;
   if(Array.isArray(prior?.messages))for(const m of prior.messages)if(m?.id){
@@ -272,6 +389,8 @@
   state.title=prior?.title||null;state.loaded=true;
  }
  async function start(persist=true){
+  if(state.verify?.active)finishVerification('Verification interrupted by new capture');
+  state.verify=null;
   const next=id();if(!next)return {ok:false,error:'Open a Discord DM first.'};await load(next);
   if(persist)await chrome.storage.local.set({[autoKey]:next});
   teardown();state.phase='scrolling';state.running=true;state.topTicks=0;state.noScroll=0;state.topId=null;
@@ -280,8 +399,8 @@
   state.title ||= document.querySelector('main [class*="title"]')?.textContent?.trim()?.slice(0,150)||null;
   state.progress='Starting automatic upward capture…';observe();scan();scheduleScroll(100);return status();
  }
- async function pause(){if(state.running)scan();teardown();state.phase='paused';state.progress='Paused; captured messages remain saved.';await chrome.storage.local.remove(autoKey);await save();return status()}
- async function clear(){await pause();const next=id();if(!next)return {ok:false,error:'Open a Discord DM first.'};state.records.clear();state.dirty=false;state.phase='idle';state.tallyDirty=true;state.progress='Local archive cleared.';await chrome.storage.local.remove(storeKey(next));return status()}
+ async function pause(){if(state.verify?.active)finishVerification('Verification paused before reaching the latest messages');if(state.running)scan();teardown();state.phase='paused';state.progress='Paused; captured messages remain saved.';await chrome.storage.local.remove(autoKey);await save();return status()}
+ async function clear(){await pause();const next=id();if(!next)return {ok:false,error:'Open a Discord DM first.'};state.records.clear();state.dirty=false;state.phase='idle';state.verify=null;state.verifyReport=null;state.tallyDirty=true;state.progress='Local archive cleared.';await chrome.storage.local.remove(storeKey(next));return status()}
  function status(){
   const same=state.id===id()&&state.loaded;
   if(state.tallyDirty){
@@ -292,6 +411,7 @@
   return {ok:true,dmId:id()||'none',running:same&&state.running,phase:same?state.phase:'idle',
    total:same?state.records.size:0,mediaCount:same?state.cachedMedia:0,unknownAuthors:same?state.cachedUnknown:0,
    progress:same?state.progress:'Open a Discord DM.',exporting:state.exporting,mediaSaved:state.mediaSaved,mediaFailed:state.mediaFailed,
+   verifying:!!state.verify?.active,verifyReport:state.verifyReport?{verdict:state.verifyReport.verdict,rechecked:state.verifyReport.secondPassRechecked,expected:state.verifyReport.initialCount,unrechecked:state.verifyReport.notRechecked,recovered:state.verifyReport.newlyRecovered,batches:state.verifyReport.batchCount}:null,
    revealBlocked:state.revealBlocked,revealClicks:state.revealClicks,revealFound:state.revealFound}
  }
  function snapshot(){return {schema:'dm-archive-v2',dmId:state.id,title:state.title,exportedAt:new Date().toISOString(),
@@ -375,7 +495,7 @@
    const prev=state.records.get(m.id);
    state.records.set(m.id,prev?{...m,...prev,media:mergeMedia(m.media,prev.media)}:m);
   }
-  state.dirty=true;state.tallyDirty=true;await save();return {...status(),note:'Imported JSON messages.'};
+  state.dirty=true;state.tallyDirty=true;state.verifyReport=null;await save();return {...status(),note:'Imported JSON messages.'};
  }
  async function reconcile(){
   if(booting)return;const next=id();if(!next){if(state.running)teardown();return}booting=true;
@@ -390,6 +510,8 @@
    case 'STATUS':await reconcile();return status();
    case 'START':return start(true);
    case 'PAUSE':return pause();
+   case 'VERIFY':return startVerification();
+   case 'VERIFY_REPORT':return exportVerification();
    case 'REVEAL_VISIBLE':{
     const dm=id();if(!dm)return {ok:false,error:'Open a Discord DM first.'};
     await load(dm);
