@@ -12,7 +12,7 @@
    topTicks:0,topId:null,noScroll:0,exporting:false,mediaSaved:0,mediaFailed:0,title:null,
    seenRows:new WeakMap(),dirtyRows:new WeakSet(),cachedScroller:null,topSince:0,stallRetries:0,nudgePending:false,
    tallyDirty:true,cachedMedia:0,cachedUnknown:0,
-   revealBlocked:true,revealClicks:0,revealAttempts:new WeakMap(),revealPauseUntil:0};
+   revealBlocked:true,revealClicks:0,revealFound:0,revealAttempts:new WeakMap(),revealPauseUntil:0};
  let booting=false;
  const id=()=>location.pathname.match(dmPath)?.[1]||null;
  const storeKey=x=>prefix+x;
@@ -74,8 +74,8 @@
  }
  function links(el){const out=new Set();for(const a of el.querySelectorAll('[id^="message-content-"] a[href],[class*="messageContent"] a[href]')){const s=safe(a.getAttribute('href'));if(s)out.add(s)}return [...out]}
  function mergeMedia(a=[],b=[]){const m=new Map(a.filter(x=>x?.url).map(x=>[mediaKey(x.url),x]));for(const x of b)if(x?.url&&!m.has(mediaKey(x.url)))m.set(mediaKey(x.url),x);return [...m.values()]}
- function scan(){
-  if(!state.running||state.id!==id())return;
+ function scan(force=false){
+  if((!force&&!state.running)||state.id!==id())return;
   let lastName=null,lastAvatar=null,changed=false;const seen=new Set();
   for(const el of document.querySelectorAll(selector)){
    const mid=messageId(el);if(!mid||seen.has(mid))continue;seen.add(mid);
@@ -140,36 +140,58 @@
  function finish(reason,phase='stalled'){
   scan();teardown();state.phase=phase;state.progress=reason;state.dirty=true;scheduleSave()
  }
- // Click only the collapsed-message Show controls in the selected DM. Does not unblock users.
- function revealBlockedMessageGroups(){
-  if(!state.revealBlocked||!state.running||state.id!==id())return 0;
-  const scroller=scrollBox();if(!scroller)return 0;
-  let clicked=0;
-  for(const el of scroller.querySelectorAll('button,[role="button"],[tabindex],span')){
-   if(clicked>=2)break;
-   const label=clean(el.textContent);
-   if(label.length>32||!/^show(?: blocked messages?)?$/i.test(label))continue;
-   if(el.matches('span')&&el.closest('button,[role="button"],[tabindex]'))continue;
-   if(!el.getClientRects().length)continue;
-   let context=el.parentElement,collapsed=false;
-   for(let depth=0;context&&context!==scroller&&depth<5;depth++,context=context.parentElement){
-    const text=clean(context.textContent);
-    if(text.length>800)break;
-    if(text.toLowerCase().includes('blocked message')){collapsed=true;break}
+ // Expand blocked-message groups using the displayed Show UI only. Never unblock users.
+ function revealRoot(){
+  const box=scrollBox();if(box?.isConnected)return box;
+  const first=document.querySelector(selector);
+  return first?.closest('main')||document.querySelector('main')||null
+ }
+ function blockedBanners(root){
+  const banners=new Map();if(!root)return banners;
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+  let node,checks=0;
+  while((node=walker.nextNode())&&checks++<10000){
+   const t=clean(node.nodeValue);
+   if(!/(?:^|[\s\u2014\u2013-])show\s*$/i.test(t))continue;
+   const leaf=node.parentElement;
+   if(!leaf?.getClientRects().length)continue;
+   let banner=null;
+   for(let el=leaf,d=0;el&&el!==root&&d<7;el=el.parentElement,d++){
+    const txt=clean(el.textContent).replace(/\s+/g,' ');
+    if(txt.length>320)break;
+    if(/\b\d+\s+blocked messages?\b/i.test(txt)&&/\bshow\s*$/i.test(txt)){banner=el;break}
    }
-   if(!collapsed)continue;
-   const now=Date.now(),previous=state.revealAttempts.get(el)||0;
-   if(now-previous<5000)continue;
-   state.revealAttempts.set(el,now);
-   try{el.click();clicked++}catch(_){}
+   if(!banner)continue;
+   const interactive=leaf.closest('button,a,[role="button"],[tabindex]');
+   const control=interactive&&banner.contains(interactive)?interactive:leaf;
+   if(!banners.has(banner))banners.set(banner,control)
   }
+  for(const el of root.querySelectorAll('[aria-label*="blocked" i]')){
+   if(!el.getClientRects().length)continue;
+   if(/\b(?:show|reveal)\b/i.test(clean(el.getAttribute('aria-label'))) && !banners.has(el))banners.set(el,el)
+  }
+  return banners
+ }
+ function revealBlockedMessageGroups(force=false){
+  if(!force&&(!state.revealBlocked||!state.running))return {found:0,clicked:0};
+  if(!state.id||state.id!==id())return {found:0,clicked:0};
+  const banners=blockedBanners(revealRoot());
+  let clicked=0;
+  for(const [banner,control] of banners){
+   if(clicked>=4)break;
+   const now=Date.now(),prior=state.revealAttempts.get(banner)||{last:0,count:0};
+   if(now-prior.last<5000||prior.count>=2)continue;
+   state.revealAttempts.set(banner,{last:now,count:prior.count+1});
+   try{control.click();clicked++}catch(_){}
+  }
+  state.revealFound=banners.size;
   if(clicked){
    state.revealClicks+=clicked;
-   state.revealPauseUntil=Date.now()+1000;
-   state.progress='Revealing blocked message groups · '+state.revealClicks+' expanded';
+   state.revealPauseUntil=Date.now()+2200;
+   state.progress='Clicked Show for '+clicked+' blocked group(s) · '+state.revealClicks+' total';
    scheduleScan()
   }
-  return clicked
+  return {found:banners.size,clicked}
  }
  function scheduleScroll(delay=450){
   if(!state.running)return;
@@ -189,7 +211,7 @@
    return 1150
   }
   state.noScroll=0;
-  if(revealBlockedMessageGroups())return 1000;
+  if(revealBlockedMessageGroups().clicked)return 1300;
   if(Date.now()<state.revealPauseUntil)return 300;
   const first=oldest();
   if(first&&first!==state.topId){
@@ -254,7 +276,7 @@
   if(persist)await chrome.storage.local.set({[autoKey]:next});
   teardown();state.phase='scrolling';state.running=true;state.topTicks=0;state.noScroll=0;state.topId=null;
   state.cachedScroller=null;state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();state.topSince=0;state.stallRetries=0;state.nudgePending=false;
-  state.revealAttempts=new WeakMap();state.revealPauseUntil=0;state.revealClicks=0;
+  state.revealAttempts=new WeakMap();state.revealPauseUntil=0;state.revealClicks=0;state.revealFound=0;
   state.title ||= document.querySelector('main [class*="title"]')?.textContent?.trim()?.slice(0,150)||null;
   state.progress='Starting automatic upward capture…';observe();scan();scheduleScroll(100);return status();
  }
@@ -270,7 +292,7 @@
   return {ok:true,dmId:id()||'none',running:same&&state.running,phase:same?state.phase:'idle',
    total:same?state.records.size:0,mediaCount:same?state.cachedMedia:0,unknownAuthors:same?state.cachedUnknown:0,
    progress:same?state.progress:'Open a Discord DM.',exporting:state.exporting,mediaSaved:state.mediaSaved,mediaFailed:state.mediaFailed,
-   revealBlocked:state.revealBlocked,revealClicks:state.revealClicks}
+   revealBlocked:state.revealBlocked,revealClicks:state.revealClicks,revealFound:state.revealFound}
  }
  function snapshot(){return {schema:'dm-archive-v2',dmId:state.id,title:state.title,exportedAt:new Date().toISOString(),
   scope:'messages observed in the rendered DM',messages:[...state.records.values()].sort((a,b)=>BigInt(a.id)<BigInt(b.id)?-1:BigInt(a.id)>BigInt(b.id)?1:0)}}
@@ -368,6 +390,15 @@
    case 'STATUS':await reconcile();return status();
    case 'START':return start(true);
    case 'PAUSE':return pause();
+   case 'REVEAL_VISIBLE':{
+    const dm=id();if(!dm)return {ok:false,error:'Open a Discord DM first.'};
+    await load(dm);
+    const result=revealBlockedMessageGroups(true);
+    if(result.clicked){scan(true);setTimeout(()=>scan(true),1200)}
+    return {...status(),note:result.clicked?'Clicked Show for '+result.clicked+' visible blocked group(s).':
+      result.found?'Found '+result.found+' blocked group(s), already attempted. Try again shortly.':
+      'No collapsed groups detected here. Scroll to the blocked-message Show bar and try again.'}
+   }
    case 'SET_REVEAL':{
     state.revealBlocked=message.enabled!==false;
     await chrome.storage.local.set({[revealKey]:state.revealBlocked});
