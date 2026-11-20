@@ -1,5 +1,5 @@
 'use strict';
-const els=Object.fromEntries(['status','dot','count','mediaCount','details','progress','start','pause','zip','html','json','txt','import','importFile','clear','revealBlocked'].map(id=>[id,document.getElementById(id)]));
+const els=Object.fromEntries(['status','dot','count','mediaCount','details','progress','start','pause','zip','html','json','txt','import','importFile','clear','revealBlocked','revealNow'].map(id=>[id,document.getElementById(id)]));
 let lastResult=null;
 async function send(type,extra={}) {
   const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
@@ -40,6 +40,7 @@ async function doAction(type,extra={}){
 }
 els.start.addEventListener('click',()=>doAction('START'));
 els.pause.addEventListener('click',()=>doAction('PAUSE'));
+els.revealNow.addEventListener('click',()=>doAction('REVEAL_VISIBLE'));
 els.revealBlocked.addEventListener('change',()=>doAction('SET_REVEAL',{enabled:els.revealBlocked.checked}));
 els.clear.addEventListener('click',()=>{if(confirm('Delete captured messages for this DM from extension storage?'))void doAction('CLEAR');});
 for(const format of ['html','json','txt','zip'])els[format].addEventListener('click',()=>doAction('EXPORT',{format}));
