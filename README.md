@@ -125,10 +125,24 @@ MIT License. See [LICENSE](LICENSE). Discord and its marks belong to their respe
 
 ---
 
-**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.1 (layout fix; live Discord compatibility unverified)
+**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.2 (adaptive capture performance; live Discord compatibility unverified)
 
 ## v2.1 layout fix
 
 Fixed a rendering bug in grouped Discord messages: when the compact timestamp column was hidden, message text and attachments moved into the 72px-wide column, causing one-word-per-line wrapping and broken alignment. Grouped messages now always occupy the correct chat content column. Sticker previews are limited to 128px, normal images to 320×250px, and videos to 350×250px. The archive header is also more compact.
 
 **How to fix an existing export:** Reload the extension at `chrome://extensions`, refresh your open Discord DM, and export HTML again. **You do not have to recapture the whole conversation.** Stored records and JSON are preserved. The fix applies to newly exported HTML, not HTML files already saved on disk.
+
+## v2.2: Faster and more resilient capture
+
+A slow Discord Web connection can make fixed-timer scrolling appear stuck. The capture loop now:
+
+- **Scans only new or changed rendered message rows** rather than reparsing all visible media/text on every pass.
+- **Caches the active scroll container** instead of repeatedly searching the whole ancestor chain.
+- **Uses adaptive scroll scheduling**, generally ~450 ms while the tab is visible and ~900 ms while hidden. It scans before every scroll step to reduce skipped messages.
+- **Waits for older messages to load** at the top, retries carefully when Discord stalls, and stops with a visible **Capture stalled** status if the page cannot make progress after several retries. This is *not* proof that every message was captured.
+- **Batches browser-storage saves to about every 8 seconds** instead of rewriting the growing archive every 1.6 seconds. Pause and ordinary exports remain available. Captured records remain stored under the same v2 local-storage keys.
+
+**To update:** install the current `extension/` folder over the old version (use **Reload** on the existing extension where possible), refresh the Discord DM, and select **Retry capture** or **Start auto capture**. Existing local captures are retained when you reload the same installed extension. **Removing the extension may delete its browser-local data, so export a JSON backup before uninstalling.**
+
+**Limit:** A browser extension cannot make Discord's servers send history faster. Aggressive scrolling risks skipped messages; adaptive waits favor reliability over guaranteed speed. This version has passed syntax validation but not live Discord regression testing.
