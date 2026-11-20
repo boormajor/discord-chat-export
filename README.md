@@ -125,7 +125,7 @@ MIT License. See [LICENSE](LICENSE). Discord and its marks belong to their respe
 
 ---
 
-**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.3 (optional blocked-message reveal; live Discord compatibility unverified)
+**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.4 (blocked-message reveal fix; live Discord compatibility unverified)
 
 ## v2.1 layout fix
 
@@ -152,3 +152,9 @@ A slow Discord Web connection can make fixed-timer scrolling appear stuck. The c
 When messages from a blocked user appear as collapsed **“1 blocked message — Show”** or **“2 blocked messages — Show”** rows, the extension can now click the visible **Show** controls while capturing the current DM. It pauses briefly to let Discord render the revealed text before scrolling upward. **Automatically show blocked messages** is enabled by default in the extension popup; uncheck it to leave blocked messages collapsed. This feature **does not unblock the user**, change Discord account settings, or access hidden messages that Discord does not expose. It only automates clicking Show buttons in the open DM. The relevant messages' timestamps and dates are recorded whenever Discord exposes a timestamp, with message-ID-derived fallback.
 
 **Compatibility:** Discord's DOM can change and blocked-message reveal hasn't been tested on a live blocked conversation; check the capture count and exported JSON. Export JSON before updating, and use **Reload** on the existing extension rather than uninstalling it to preserve saved chat history.
+
+## v2.4: Blocked message reveal fix
+
+Discord may render the entire `1 blocked message — Show` banner as a single clickable element, rather than a separate Show button. v2.4 detects full banners and nested Show controls. **Reveal visible blocked messages now** in the popup lets you test detection while viewing an affected DM. It reports how many controls were found or clicked. Auto capture also tries to reveal them before moving further up the page. This does not unblock users or recover deleted content. Live Discord support remains unverified; you may still need to click Show manually if Discord's structure differs.
+
+Before updating, export a JSON backup and **Reload** the existing extension rather than uninstalling it.
