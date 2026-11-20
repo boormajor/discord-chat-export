@@ -6,12 +6,13 @@
  globalThis.__dmArchiveV2Loaded=true;
  const selector='li[id^="chat-messages-"],li[data-list-item-id^="chat-messages"],[data-list-item-id^="chat-messages"]';
  const dmPath=/^\/channels\/@me\/(\d{15,21})\/?$/;
- const autoKey='dm-archive-v2:auto-dm',prefix='dm-archive-v2:messages:';
+ const autoKey='dm-archive-v2:auto-dm',prefix='dm-archive-v2:messages:',revealKey='dm-archive-v2:reveal-blocked';
  const state={id:null,loaded:false,records:new Map(),running:false,phase:'idle',progress:'',
    dirty:false,saveChain:Promise.resolve(),saveTimer:null,scrollTimer:null,scanTimer:null,observer:null,
    topTicks:0,topId:null,noScroll:0,exporting:false,mediaSaved:0,mediaFailed:0,title:null,
    seenRows:new WeakMap(),dirtyRows:new WeakSet(),cachedScroller:null,topSince:0,stallRetries:0,nudgePending:false,
-   tallyDirty:true,cachedMedia:0,cachedUnknown:0};
+   tallyDirty:true,cachedMedia:0,cachedUnknown:0,
+   revealBlocked:true,revealClicks:0,revealAttempts:new WeakMap(),revealPauseUntil:0};
  let booting=false;
  const id=()=>location.pathname.match(dmPath)?.[1]||null;
  const storeKey=x=>prefix+x;
@@ -139,6 +140,37 @@
  function finish(reason,phase='stalled'){
   scan();teardown();state.phase=phase;state.progress=reason;state.dirty=true;scheduleSave()
  }
+ // Click only the collapsed-message Show controls in the selected DM. Does not unblock users.
+ function revealBlockedMessageGroups(){
+  if(!state.revealBlocked||!state.running||state.id!==id())return 0;
+  const scroller=scrollBox();if(!scroller)return 0;
+  let clicked=0;
+  for(const el of scroller.querySelectorAll('button,[role="button"],[tabindex],span')){
+   if(clicked>=2)break;
+   const label=clean(el.textContent);
+   if(label.length>32||!/^show(?: blocked messages?)?$/i.test(label))continue;
+   if(el.matches('span')&&el.closest('button,[role="button"],[tabindex]'))continue;
+   if(!el.getClientRects().length)continue;
+   let context=el.parentElement,collapsed=false;
+   for(let depth=0;context&&context!==scroller&&depth<5;depth++,context=context.parentElement){
+    const text=clean(context.textContent);
+    if(text.length>800)break;
+    if(text.toLowerCase().includes('blocked message')){collapsed=true;break}
+   }
+   if(!collapsed)continue;
+   const now=Date.now(),previous=state.revealAttempts.get(el)||0;
+   if(now-previous<5000)continue;
+   state.revealAttempts.set(el,now);
+   try{el.click();clicked++}catch(_){}
+  }
+  if(clicked){
+   state.revealClicks+=clicked;
+   state.revealPauseUntil=Date.now()+1000;
+   state.progress='Revealing blocked message groups · '+state.revealClicks+' expanded';
+   scheduleScan()
+  }
+  return clicked
+ }
  function scheduleScroll(delay=450){
   if(!state.running)return;
   state.scrollTimer=setTimeout(()=>{
@@ -157,6 +189,8 @@
    return 1150
   }
   state.noScroll=0;
+  if(revealBlockedMessageGroups())return 1000;
+  if(Date.now()<state.revealPauseUntil)return 300;
   const first=oldest();
   if(first&&first!==state.topId){
    state.topId=first;state.topSince=Date.now();state.stallRetries=0
@@ -205,6 +239,8 @@
   if(state.id&&state.dirty)await save();
   teardown();state.id=next;state.loaded=false;state.records.clear();state.phase='idle';state.progress='';state.title=null;state.topTicks=0;
   state.cachedScroller=null;state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();state.tallyDirty=true;state.topSince=0;state.stallRetries=0;state.nudgePending=false;
+  state.revealAttempts=new WeakMap();state.revealPauseUntil=0;
+  state.revealBlocked=(await chrome.storage.local.get(revealKey))[revealKey]!==false;
   const prior=(await chrome.storage.local.get(storeKey(next)))[storeKey(next)];
   if(state.id!==next)return;
   if(Array.isArray(prior?.messages))for(const m of prior.messages)if(m?.id){
@@ -218,6 +254,7 @@
   if(persist)await chrome.storage.local.set({[autoKey]:next});
   teardown();state.phase='scrolling';state.running=true;state.topTicks=0;state.noScroll=0;state.topId=null;
   state.cachedScroller=null;state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();state.topSince=0;state.stallRetries=0;state.nudgePending=false;
+  state.revealAttempts=new WeakMap();state.revealPauseUntil=0;state.revealClicks=0;
   state.title ||= document.querySelector('main [class*="title"]')?.textContent?.trim()?.slice(0,150)||null;
   state.progress='Starting automatic upward capture…';observe();scan();scheduleScroll(100);return status();
  }
@@ -232,7 +269,8 @@
   }
   return {ok:true,dmId:id()||'none',running:same&&state.running,phase:same?state.phase:'idle',
    total:same?state.records.size:0,mediaCount:same?state.cachedMedia:0,unknownAuthors:same?state.cachedUnknown:0,
-   progress:same?state.progress:'Open a Discord DM.',exporting:state.exporting,mediaSaved:state.mediaSaved,mediaFailed:state.mediaFailed}
+   progress:same?state.progress:'Open a Discord DM.',exporting:state.exporting,mediaSaved:state.mediaSaved,mediaFailed:state.mediaFailed,
+   revealBlocked:state.revealBlocked,revealClicks:state.revealClicks}
  }
  function snapshot(){return {schema:'dm-archive-v2',dmId:state.id,title:state.title,exportedAt:new Date().toISOString(),
   scope:'messages observed in the rendered DM',messages:[...state.records.values()].sort((a,b)=>BigInt(a.id)<BigInt(b.id)?-1:BigInt(a.id)>BigInt(b.id)?1:0)}}
@@ -330,6 +368,11 @@
    case 'STATUS':await reconcile();return status();
    case 'START':return start(true);
    case 'PAUSE':return pause();
+   case 'SET_REVEAL':{
+    state.revealBlocked=message.enabled!==false;
+    await chrome.storage.local.set({[revealKey]:state.revealBlocked});
+    return {...status(),note:state.revealBlocked?'Auto-reveal enabled.':'Auto-reveal disabled.'};
+   }
    case 'CLEAR':return clear();
    case 'EXPORT':return exportData(message.format);
    case 'IMPORT':return importData(message.data);
