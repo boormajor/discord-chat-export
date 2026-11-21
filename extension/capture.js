@@ -13,7 +13,7 @@
    seenRows:new WeakMap(),dirtyRows:new WeakSet(),cachedScroller:null,topSince:0,stallRetries:0,nudgePending:false,
    tallyDirty:true,cachedMedia:0,cachedUnknown:0,cachedLegacy:0,
    revealBlocked:true,revealClicks:0,revealFound:0,revealAttempts:new WeakMap(),revealPauseUntil:0,
-    verify:null,verifyReport:null};
+    verify:null,verifyReport:null,pendingMove:null,visibleTopId:null};
  let booting=false;
  const id=()=>location.pathname.match(dmPath)?.[1]||null;
  const storeKey=x=>prefix+x;
@@ -176,8 +176,9 @@
  }
  function teardown(){if(state.scrollTimer)clearTimeout(state.scrollTimer);if(state.scanTimer)clearTimeout(state.scanTimer);state.scrollTimer=state.scanTimer=null;state.observer?.disconnect();state.observer=null;state.running=false}
  function scrollBox(){
-  if(state.cachedScroller?.isConnected)return state.cachedScroller;
   const row=document.querySelector(selector);if(!row)return null;
+  if(state.cachedScroller?.isConnected&&state.cachedScroller.contains(row))return state.cachedScroller;
+  state.cachedScroller=null;
   let selected=null,score=-1;
   for(let p=row.parentElement;p&&p!==document.body;p=p.parentElement){
    if(p.scrollHeight>p.clientHeight+60&&p.clientHeight>150){
@@ -188,9 +189,29 @@
   state.cachedScroller=selected;
   return selected
  }
+ function visibleWindow(){
+  const ids=[],unique=new Set();
+  for(const row of document.querySelectorAll(selector)){
+   const mid=messageId(row);if(mid&&!unique.has(mid)){ids.push(mid);unique.add(mid)}
+  }
+  return {oldest:DmPacing.oldestVisible(ids),newest:ids[ids.length-1]||null,count:ids.length}
+ }
+ function noteScrollMove(scroller,before){
+  state.pendingMove={before,top:scroller.scrollTop,at:Date.now()}
+ }
+ function waitForRender(scroller){
+  const move=state.pendingMove;if(!move)return false;
+  const elapsed=Date.now()-move.at;
+  const changed=!DmPacing.sameWindow(visibleWindow(),move.before);
+  const min=DmPacing.config.minimumWaitMs;
+  if(elapsed<min)return true;
+  if(!changed&&elapsed<min+DmPacing.config.extraRenderWaitMs+1800)return true;
+  state.pendingMove=null;return false
+ }
+ function resetPacing(){state.pendingMove=null;state.visibleTopId=null}
  function oldest(){let out=null;for(const k of state.records.keys())if(!out||BigInt(k)<BigInt(out))out=k;return out}
  function finish(reason,phase='stalled'){
-  scan();teardown();state.phase=phase;state.progress=reason;state.dirty=true;scheduleSave()
+  scan();teardown();state.phase=phase;state.progress=reason;state.dirty=true;void save()
  }
  // Expand blocked-message groups using the displayed Show UI only. Never unblock users.
  function revealRoot(){
@@ -271,6 +292,8 @@
    const scroller=scrollBox();
    if(!scroller){v.noScroller++;if(v.noScroller>30)finishVerification('Verification stopped: message scroller not found');return 1000}
    v.noScroller=0;
+   if(document.hidden){state.progress='Verification paused until the DM tab is visible';return DmPacing.config.hiddenWaitMs}
+   if(waitForRender(scroller)){state.progress='Verification: waiting for messages to render';return 650}
    if(state.revealBlocked){
      const reveal=revealBlockedMessageGroups();
      if(reveal.found>reveal.clicked)v.collapsedBlockedGroups=Math.max(v.collapsedBlockedGroups,reveal.found-reveal.clicked);
@@ -280,14 +303,14 @@
    const current=oldest();
    const nearTop=scroller.scrollTop<=3;
    const nearBottom=scroller.scrollTop+scroller.clientHeight>=scroller.scrollHeight-5;
-   const move=Math.max(170,Math.min(420,Math.floor(scroller.clientHeight*.4)));
+   const move=DmPacing.step(scroller.clientHeight);
    const now=Date.now();
    if(v.phase==='up'){
      if(current&&current!==v.lastOldest){v.lastOldest=current;v.lastProgress=now;v.retries=0}
      if(nearTop){
-       if(now-v.lastProgress>11000){
-         if(v.retries>=2){
-           v.topObserved=true;v.phase='down';v.lastProgress=now;v.lastScroll=null;
+       if(now-v.lastProgress>DmPacing.config.historyLoadWaitMs){
+         if(v.retries>=DmPacing.config.maxHistoryRetries){
+           v.topObserved=false;v.phase='down';v.lastProgress=now;v.lastScroll=null;
            state.progress='Verification second pass: checking newer messages';
            return 700
          }
@@ -299,9 +322,10 @@
        state.progress='Verification: waiting for older messages · '+v.seen.size+' rows re-observed';
        return 900
      }
-     scroller.scrollTop=Math.max(0,scroller.scrollTop-move);
+     const before=visibleWindow();
+     scroller.scrollTop=Math.max(0,scroller.scrollTop-move);noteScrollMove(scroller,before);
      state.progress='Verification: scanning toward oldest messages · '+v.seen.size+' rows observed';
-     return document.hidden?950:560
+     return DmPacing.config.minimumWaitMs
    }
    if(v.phase==='down'){
      const position=scroller.scrollTop,atEnd=nearBottom;
@@ -324,9 +348,10 @@
        state.progress='Verification: retrying stalled scroll ('+v.retries+'/3)';
        return 800
      }
-     scroller.scrollTop=Math.min(scroller.scrollHeight-scroller.clientHeight,position+move);
+     const before=visibleWindow();
+     scroller.scrollTop=Math.min(scroller.scrollHeight-scroller.clientHeight,position+move);noteScrollMove(scroller,before);
      state.progress='Verification: checking batches of 200 · '+v.seen.size+' observed';
-     return document.hidden?950:560
+     return DmPacing.config.minimumWaitMs
    }
    return 1000
  }
@@ -344,7 +369,7 @@
    state.verifyReport=null;
    state.phase='verifying';state.running=true;state.cachedScroller=null;
    state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();
-   state.revealAttempts=new WeakMap();state.revealPauseUntil=0;
+   state.revealAttempts=new WeakMap();state.revealPauseUntil=0;resetPacing();
    state.progress='Verification started: '+baseline.length+' saved messages in '+Math.ceil(baseline.length/200)+' audit batches. Scanning older history first.';
    observe();scan();scheduleScroll(150);
    return status()
@@ -366,51 +391,52 @@
  }
  function scroll(){
   if(!state.running||state.id!==id()){teardown();return 0}
+  if(document.hidden){state.progress='Capture paused while Discord tab is hidden';return DmPacing.config.hiddenWaitMs}
   scan();
   const scroller=scrollBox();
   if(!scroller){
-   state.noScroll++;state.progress='Waiting for Discord to render messages…';
-   if(state.noScroll>=30)finish('Discord did not render the message scroller. Refresh this DM to resume.');
-   return 1150
+   state.noScroll++;state.progress='Waiting for Discord message list ('+state.noScroll+'/30)…';
+   if(state.noScroll>=30)finish('Message list unavailable; archive may be incomplete.');
+   return 1500
   }
   state.noScroll=0;
-  if(revealBlockedMessageGroups().clicked)return 1300;
-  if(Date.now()<state.revealPauseUntil)return 300;
-  const first=oldest();
-  if(first&&first!==state.topId){
-   state.topId=first;state.topSince=Date.now();state.stallRetries=0
-  }
-  if(state.nudgePending){
-   state.nudgePending=false;scroller.scrollTop=0;
-   state.progress='Retrying older-message loading…';
-   return 950
-  }
+  if(waitForRender(scroller)){state.progress='Waiting for message rows to finish rendering…';return 650}
+  if(revealBlockedMessageGroups().clicked){state.pendingMove=null;return DmPacing.config.afterRevealWaitMs}
+  if(Date.now()<state.revealPauseUntil)return 650;
+  const visible=visibleWindow();
+  if(!visible.oldest){state.progress='Waiting for visible message IDs…';return 1600}
+  const now=Date.now();
   if(scroller.scrollTop<=3){
-   if(!state.topSince)state.topSince=Date.now();
-   const elapsed=Date.now()-state.topSince;
-   if(elapsed>=12000){
+   if(state.visibleTopId!==visible.oldest){
+    state.visibleTopId=visible.oldest;state.topSince=now;state.stallRetries=0
+   }
+   if(!state.topSince)state.topSince=now;
+   const elapsed=now-state.topSince;
+   if(elapsed>=DmPacing.config.historyLoadWaitMs){
     state.stallRetries++;
-    if(state.stallRetries>=3){
-     finish('Discord has not loaded older messages after several retries. Your capture is saved. Refresh this DM to resume automatically.');
+    if(state.stallRetries>=DmPacing.config.maxHistoryRetries){
+     finish('Older history did not load after repeated checks. Archive may be incomplete.');
      return 0
     }
-    scroller.scrollTop=Math.min(
-     Math.max(0,scroller.scrollHeight-scroller.clientHeight),
-     Math.max(100,Math.floor(scroller.clientHeight*.25))
-    );
-    state.topSince=Date.now();state.nudgePending=true;
-    state.progress='Discord is slow. Retrying history load ('+state.stallRetries+'/3)…';
-    return 800
+    const before=visibleWindow();
+    scroller.scrollTop=Math.min(Math.max(0,scroller.scrollHeight-scroller.clientHeight),Math.max(80,scroller.clientHeight*.18));
+    noteScrollMove(scroller,before);
+    state.nudgePending=true;state.topSince=now;
+    state.progress='Discord slow; retrying older history ('+state.stallRetries+'/'+DmPacing.config.maxHistoryRetries+')';
+    return DmPacing.config.minimumWaitMs
    }
-   scroller.scrollTop=0;
-   state.progress='Waiting for older messages from Discord · '+Math.round(elapsed/1000)+'s';
-   return 950
+   if(state.nudgePending){
+    state.nudgePending=false;const before=visibleWindow();scroller.scrollTop=0;noteScrollMove(scroller,before)
+   }else scroller.scrollTop=0;
+   state.progress='Checking older history · '+Math.floor(elapsed/1000)+' seconds';
+   return 1500
   }
-  state.topSince=0;
-  const step=Math.max(140,Math.min(520,Math.floor(scroller.clientHeight*.45)));
-  scroller.scrollTop=Math.max(0,scroller.scrollTop-step);
-  state.progress='Capturing older messages · '+state.records.size.toLocaleString()+' saved';
-  return document.hidden?900:450
+  state.visibleTopId=null;state.topSince=0;
+  const before=visibleWindow();
+  scroller.scrollTop=Math.max(0,scroller.scrollTop-DmPacing.step(scroller.clientHeight));
+  noteScrollMove(scroller,before);
+  state.progress='Careful capture · '+state.records.size.toLocaleString()+' messages saved';
+  return DmPacing.config.minimumWaitMs
  }
  async function save(){
   if(!state.dirty||!state.id||!state.loaded)return;state.dirty=false;
@@ -423,7 +449,7 @@
   if(next===state.id&&state.loaded)return;
   if(state.id&&state.dirty)await save();
   teardown();state.id=next;state.loaded=false;state.records.clear();state.phase='idle';state.progress='';state.title=null;state.topTicks=0;
-  state.cachedScroller=null;state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();state.tallyDirty=true;state.topSince=0;state.stallRetries=0;state.nudgePending=false;
+  state.cachedScroller=null;state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();state.tallyDirty=true;state.topSince=0;state.stallRetries=0;state.nudgePending=false;resetPacing();
   state.revealAttempts=new WeakMap();state.revealPauseUntil=0;
   state.revealBlocked=(await chrome.storage.local.get(revealKey))[revealKey]!==false;
   state.verify=null;state.verifyReport=null;
@@ -450,7 +476,7 @@
   const next=id();if(!next)return {ok:false,error:'Open a Discord DM first.'};await load(next);
   if(persist)await chrome.storage.local.set({[autoKey]:next});
   teardown();state.phase='scrolling';state.running=true;state.topTicks=0;state.noScroll=0;state.topId=null;
-  state.cachedScroller=null;state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();state.topSince=0;state.stallRetries=0;state.nudgePending=false;
+  state.cachedScroller=null;state.seenRows=new WeakMap();state.dirtyRows=new WeakSet();state.topSince=0;state.stallRetries=0;state.nudgePending=false;resetPacing();
   state.revealAttempts=new WeakMap();state.revealPauseUntil=0;state.revealClicks=0;state.revealFound=0;
   state.title ||= document.querySelector('main [class*="title"]')?.textContent?.trim()?.slice(0,150)||null;
   state.progress='Starting automatic upward capture…';observe();scan();scheduleScroll(100);return status();
