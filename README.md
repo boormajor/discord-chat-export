@@ -125,7 +125,7 @@ MIT License. See [LICENSE](LICENSE). Discord and its marks belong to their respe
 
 ---
 
-**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.5 (verification audit; live Discord compatibility unverified)
+**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.6 (author attribution correction; live Discord compatibility unverified)
 
 ## v2.1 layout fix
 
@@ -177,3 +177,16 @@ Before updating, export a JSON backup and **Reload** the existing extension rath
 **What cannot be proved:** whether Discord delivered every server-side message, whether inaccessible/deleted messages existed, or whether a numerical gap between Snowflake IDs implies a missing message. A completed verification certifies only the *observed* records and is not evidence of a perfectly complete chat export. Some old IDs may not be reobserved due to Discord load stalls; review those batches. A media link being present does not guarantee its file remains downloadable. The two-pass mode uses the normal visible conversation and does not access the Discord API, tokens or cookies.
 
 **Compatibility:** static JavaScript tests are run, but live Discord Web history traversal remains unverified. Browser tab must remain open; Discord may throttle rendering. After upgrading, replace the existing extension files and click **Reload**. Do not uninstall if you want to retain browser-local message storage.
+
+## v2.6: Author attribution protection
+
+**Why this change matters:** Older builds could attach the preceding user's name to a different speaker's message when Discord virtualized/reordered the list. A username inside a reply preview could also be mistaken for the actual message author.
+
+**Changes:**
+
+- The exporter first seeks the **username header whose DOM ID matches the message ID**. Reply/embed headers are excluded.
+- Compact grouped messages inherit a speaker only when the rendered rows are directly adjacent siblings, the previous attribution is trusted, the current row does not start a new group, and their message-ID-derived timestamps are within seven minutes and in order. Otherwise, the author is **unknown** rather than guessed.
+- Stored messages from v2.5 and older with old header/visible-context attribution are **migrated to `unverified-legacy`**. The old name is saved separately in `legacyAuthor` for your inspection but is **not displayed as the verified author**. Text, message IDs, timestamps and media are kept. Re-scan or verify the affected DM to recover reliable author labels.
+- JSON verification now reports unknown/unverified author counts and marks the result as `needs-review` when author attribution is incomplete. HTML displays **Unknown sender (unverified)** for uncertain messages.
+
+**Recommended update:** First export your existing archive as JSON and keep it secure. Replace files in your existing extension folder, click Reload in `chrome://extensions`, refresh Discord, then run a new capture or verification. Do **not** uninstall the extension or clear local storage. This cannot automatically fix every incorrectly attributed message in the older export without reobserving Discord's message rows. Always spot-check the resulting messages against Discord Web.
