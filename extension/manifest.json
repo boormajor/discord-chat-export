@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "DM Archive — Discord-style export",
-  "version": "2.7.0",
-  "description": "Discord-style local DM export with faithful chat layout, audit, media ZIP, and no tokens.",
+  "version": "2.8.0",
+  "description": "Reliable local Discord DM export with conservative scrolling, loading checks, verification and no tokens.",
   "permissions": [
     "storage",
     "unlimitedStorage"
@@ -30,6 +30,7 @@
         "zip.js",
         "renderer.js",
         "audit.js",
+        "pacing.js",
         "capture.js"
       ],
       "run_at": "document_idle"
