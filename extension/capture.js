@@ -441,10 +441,10 @@
  async function save(){
   if(!state.dirty||!state.id||!state.loaded)return;state.dirty=false;
   const key=storeKey(state.id),payload={schema:'dm-archive-v2',title:state.title,messages:[...state.records.values()],savedAt:new Date().toISOString()};
-  state.saveChain=state.saveChain.catch(()=>{}).then(()=>chrome.storage.local.set({[key]:payload})).catch(e=>{state.progress='Storage error: '+e.message;state.dirty=true});
+  state.saveChain=state.saveChain.catch(()=>{}).then(()=>chrome.storage.local.set({[key]:payload})).catch(e=>{state.progress='Storage error: '+e.message+'; retrying save';state.dirty=true;scheduleSave()});
   await state.saveChain;
  }
- function scheduleSave(){if(state.saveTimer)return;state.saveTimer=setTimeout(()=>{state.saveTimer=null;void save()},8000)}
+ function scheduleSave(){if(state.saveTimer)return;state.saveTimer=setTimeout(()=>{state.saveTimer=null;void save()},5000)}
  async function load(next){
   if(next===state.id&&state.loaded)return;
   if(state.id&&state.dirty)await save();
