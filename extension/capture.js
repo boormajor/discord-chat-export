@@ -11,7 +11,7 @@
    dirty:false,saveChain:Promise.resolve(),saveTimer:null,scrollTimer:null,scanTimer:null,observer:null,
    topTicks:0,topId:null,noScroll:0,exporting:false,mediaSaved:0,mediaFailed:0,title:null,
    seenRows:new WeakMap(),dirtyRows:new WeakSet(),cachedScroller:null,topSince:0,stallRetries:0,nudgePending:false,
-   tallyDirty:true,cachedMedia:0,cachedUnknown:0,
+   tallyDirty:true,cachedMedia:0,cachedUnknown:0,cachedLegacy:0,
    revealBlocked:true,revealClicks:0,revealFound:0,revealAttempts:new WeakMap(),revealPauseUntil:0,
     verify:null,verifyReport:null};
  let booting=false;
@@ -21,8 +21,42 @@
  function safe(x){try{const u=new URL(x,location.href);return u.protocol==='https:'?u.href:null}catch(_){return null}}
  function snowflake(x){try{return new Date(Number((BigInt(x)>>22n)+1420070400000n)).toISOString()}catch(_){return null}}
  function messageId(el){return (el.getAttribute('data-list-item-id')||el.id||'').match(/(\d{15,21})$/)?.[1]||null}
- function author(el){const elName=el.querySelector('[id^="message-username-"],h3 [class*="username"],h3 [class*="Username"]');return clean(elName?.textContent||'').replace(/,?\s*Server Tag:\s*[^\n]*$/i,'').trim()||null}
- function avatar(el){return safe(el.querySelector('img[class*="avatar"],img[src*="/avatars/"],img[src*="/embed/avatars/"]')?.getAttribute('src'))}
+ // Match message author metadata to the same message ID; never read the reply/quote header.
+ function ownHeader(el,mid){
+  const exact=el.querySelector('[id="message-username-'+mid+'"]');
+  if(exact&&!exact.closest('[class*="replied"],[class*="Replied"],[class*="reply"],[class*="Reply"],blockquote'))return exact;
+  // Fall back only to a single dedicated message header, never an arbitrary username in the row.
+  const headers=[...el.querySelectorAll('h3')].filter(h=>{
+   const classes=String(h.className||'');
+   return /header/i.test(classes)&&!h.closest('[class*="replied"],[class*="Replied"],[class*="reply"],[class*="Reply"],blockquote,[class*="embed"],[class*="Embed"]');
+  });
+  if(headers.length!==1)return null;
+  return headers[0].querySelector('[class*="username"],[class*="Username"]')
+ }
+ function author(el,mid){
+  const node=ownHeader(el,mid);
+  return clean(node?.textContent||'').replace(/,?\s*Server Tag:\s*[^\n]*$/i,'').trim()||null
+ }
+ function avatar(el){
+  const images=el.querySelectorAll('img[class*="avatar"],img[src*="/avatars/"],img[src*="/embed/avatars/"]');
+  for(const img of images){
+   if(img.closest('[class*="reply"],[class*="Reply"],[class*="embed"],[class*="Embed"],blockquote'))continue;
+   return safe(img.getAttribute('src'))
+  }
+  return null
+ }
+ function groupStart(el){
+  return !!el.querySelector('[class*="groupStart"],[class*="GroupStart"]')
+    || /\bgroupStart\b/i.test(String(el.className||''))
+ }
+ function trustedAuthor(m){return !!(m?.author&&['same-message-header','adjacent-group'].includes(m.authorSource))}
+ function timeGap(previousId,mid){
+  try{
+   const left=Number((BigInt(previousId)>>22n)+1420070400000n);
+   const right=Number((BigInt(mid)>>22n)+1420070400000n);
+   return right-left
+  }catch(_){return Infinity}
+ }
  function body(el){
   const item=el.querySelector('[id^="message-content-"],[class*="messageContent"]');if(!item)return '';
   const node=item.cloneNode(true);
@@ -77,32 +111,45 @@
  function mergeMedia(a=[],b=[]){const m=new Map(a.filter(x=>x?.url).map(x=>[mediaKey(x.url),x]));for(const x of b)if(x?.url&&!m.has(mediaKey(x.url)))m.set(mediaKey(x.url),x);return [...m.values()]}
  function scan(force=false){
   if((!force&&!state.running)||state.id!==id())return;
-  let lastName=null,lastAvatar=null,changed=false;const seen=new Set();
+  let previousEl=null,previousRecord=null,changed=false;const seen=new Set();
   for(const el of document.querySelectorAll(selector)){
    const mid=messageId(el);if(!mid||seen.has(mid))continue;seen.add(mid);
    if(state.verify?.active)state.verify.seen.add(mid);
    const old=state.records.get(mid);
-   // Processing the same unchanged row repeatedly is expensive, especially with thousands of messages.
    if(old&&state.seenRows.get(el)===mid&&!state.dirtyRows.has(el)){
-    if(old.authorSource==='header'){lastName=old.author;lastAvatar=old.avatar}
-    continue;
+    previousEl=el;previousRecord=old;
+    continue
    }
-   const direct=author(el);
-   if(direct){lastName=direct;lastAvatar=avatar(el)}
-   const newName=direct||old?.author||lastName||null;
-   const rec={id:mid,author:newName,
-    avatar:(direct?avatar(el):old?.avatar||(lastName?lastAvatar:null))||null,
-    authorSource:direct?'header':old?.authorSource||(lastName?'visible-context':'unknown'),
+   const direct=author(el,mid);
+   // A compact message may inherit the preceding speaker only when Discord actually
+   // rendered the two rows as adjacent siblings, without a new group header.
+   const adjacent=!!(previousEl&&previousRecord&&trustedAuthor(previousRecord)
+     &&previousEl.parentElement===el.parentElement&&previousEl.nextElementSibling===el
+     &&!groupStart(el)&&!direct
+     &&timeGap(previousRecord.id,mid)>=0&&timeGap(previousRecord.id,mid)<420000);
+   let name=null,source='unknown',picture=null;
+   if(direct){
+    name=direct;source='same-message-header';picture=avatar(el)||null
+   }else if(adjacent){
+    name=previousRecord.author;source='adjacent-group';picture=previousRecord.avatar||null
+   }else if(trustedAuthor(old)){
+    name=old.author;source=old.authorSource;picture=old.avatar||null
+   }
+   // Prior releases could read a quoted user's name or carry it over a virtualized boundary.
+   // Keep those guesses only as legacy evidence; never display them as verified authors.
+   const legacyAuthor=old?.legacyAuthor||(!trustedAuthor(old)&&old?.author?old.author:null);
+   const rec={id:mid,author:name,avatar:picture,authorSource:source,
+    ...(legacyAuthor?{legacyAuthor}:{}),
     timestamp:time(el,mid)||old?.timestamp||null,
     content:body(el)||old?.content||'',
     media:mergeMedia(old?.media||[],media(el)),
     links:[...new Set([...(old?.links||[]),...links(el)])]};
-   if(old?.authorSource==='header'&&!direct){rec.author=old.author;rec.authorSource='header'}
    state.seenRows.set(el,mid);state.dirtyRows.delete(el);
    if(!old||JSON.stringify(old)!==JSON.stringify(rec)){
-    if(state.verify?.active&&old&&old.author!==rec.author&&rec.author)state.verify.fieldChanges++;
+    if(state.verify?.active&&old&&old.author!==rec.author)state.verify.fieldChanges++;
     state.records.set(mid,rec);changed=true
    }
+   previousEl=el;previousRecord=rec;
   }
   if(changed){state.dirty=true;state.tallyDirty=true;scheduleSave()}
  }
@@ -384,8 +431,17 @@
   if(state.id!==next)return;
   if(Array.isArray(prior?.messages))for(const m of prior.messages)if(m?.id){
    if(!m.media&&Array.isArray(m.attachments))m.media=m.attachments.map(x=>({url:x,kind:mediaType(x),name:''}));
+   // Previous versions could misattribute authors. Preserve the old label for reference,
+   // but remove it from authoritative output until the message is reobserved.
+   if(!['same-message-header','adjacent-group'].includes(m.authorSource)){
+    if(m.author&&!m.legacyAuthor)m.legacyAuthor=m.author;
+    if(m.author||m.avatar||m.authorSource!=='unverified-legacy'){
+     m.author=null;m.avatar=null;m.authorSource='unverified-legacy';state.dirty=true;
+    }
+   }
    state.records.set(m.id,m);
   }
+  if(state.dirty){state.tallyDirty=true;scheduleSave()}
   state.title=prior?.title||null;state.loaded=true;
  }
  async function start(persist=true){
@@ -404,12 +460,12 @@
  function status(){
   const same=state.id===id()&&state.loaded;
   if(state.tallyDirty){
-   let media=0,unknown=0;
-   for(const m of state.records.values()){media+=m.media?.length||0;if(!m.author)unknown++}
-   state.cachedMedia=media;state.cachedUnknown=unknown;state.tallyDirty=false
+   let media=0,unknown=0,legacy=0;
+   for(const m of state.records.values()){media+=m.media?.length||0;if(!m.author)unknown++;if(m.authorSource==='unverified-legacy')legacy++}
+   state.cachedMedia=media;state.cachedUnknown=unknown;state.cachedLegacy=legacy;state.tallyDirty=false
   }
   return {ok:true,dmId:id()||'none',running:same&&state.running,phase:same?state.phase:'idle',
-   total:same?state.records.size:0,mediaCount:same?state.cachedMedia:0,unknownAuthors:same?state.cachedUnknown:0,
+   total:same?state.records.size:0,mediaCount:same?state.cachedMedia:0,unknownAuthors:same?state.cachedUnknown:0,unverifiedLegacy:same?state.cachedLegacy:0,
    progress:same?state.progress:'Open a Discord DM.',exporting:state.exporting,mediaSaved:state.mediaSaved,mediaFailed:state.mediaFailed,
    verifying:!!state.verify?.active,verifyReport:state.verifyReport?{verdict:state.verifyReport.verdict,rechecked:state.verifyReport.secondPassRechecked,expected:state.verifyReport.initialCount,unrechecked:state.verifyReport.notRechecked,recovered:state.verifyReport.newlyRecovered,batches:state.verifyReport.batchCount}:null,
    revealBlocked:state.revealBlocked,revealClicks:state.revealClicks,revealFound:state.revealFound}
