@@ -125,7 +125,7 @@ MIT License. See [LICENSE](LICENSE). Discord and its marks belong to their respe
 
 ---
 
-**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.6 (author attribution correction; live Discord compatibility unverified)
+**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.7 (Discord-style HTML redesign; live Discord compatibility unverified)
 
 ## v2.1 layout fix
 
@@ -190,3 +190,11 @@ Before updating, export a JSON backup and **Reload** the existing extension rath
 - JSON verification now reports unknown/unverified author counts and marks the result as `needs-review` when author attribution is incomplete. HTML displays **Unknown sender (unverified)** for uncertain messages.
 
 **Recommended update:** First export your existing archive as JSON and keep it secure. Replace files in your existing extension folder, click Reload in `chrome://extensions`, refresh Discord, then run a new capture or verification. Do **not** uninstall the extension or clear local storage. This cannot automatically fix every incorrectly attributed message in the older export without reobserving Discord's message rows. Always spot-check the resulting messages against Discord Web.
+
+## v2.7: Discord-style exported HTML redesign
+
+The generated HTML now more closely resembles Discord Desktop DM chat: a dark navigation rail, a real-looking DM sidebar with the archived conversation selected, a conversation header, avatar/name/timestamp message rows, compact adjacent messages with timestamps on hover, date dividers, inline media, and a noninteractive read-only composer at the bottom. Archive counts and limitations are tucked under **Archive info** in the header rather than in a large strip above the chat.
+
+**Existing captures are preserved:** this is only an HTML renderer and popup version change. Replace the source in your **already installed** extension, click Reload on its card at `chrome://extensions`, refresh the Discord DM tab, and export **HTML** or **HTML + offline media ZIP** again. Previous HTML files do not update in place. Keep a JSON backup before changing the extension. Do not uninstall the old extension if you want to preserve browser-local history.
+
+**Limits:** This is an unofficial read-only recreation of Discord's chat appearance, not a functioning Discord app. Message contents, reactions, replies and attachments are limited to the information the capture engine actually recorded. Missing or unverified authors will remain labelled as such rather than inventing a sender. The HTML structure and exported sample underwent local syntax/smoke tests; this version was not tested against a live Discord conversation. Do not share private conversation archives publicly without permission.
