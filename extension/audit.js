@@ -22,16 +22,19 @@
     const missing=expect.filter(x=>!seenSet.has(x));
     const newIds=known.filter(x=>!expectSet.has(x));
     const unknownAuthors=messages.filter(m=>!m.author).length;
+    const unverifiedLegacy=messages.filter(m=>m.authorSource==='unverified-legacy'||!!m.legacyAuthor&&!m.author).length;
+    const attributedByHeader=messages.filter(m=>m.authorSource==='same-message-header').length;
+    const attributedByAdjacentGroup=messages.filter(m=>m.authorSource==='adjacent-group').length;
     const emptyPayload=messages.filter(m=>!String(m.content||'').trim()&&!(m.media||[]).length&&!(m.links||[]).length).length;
     const startObserved=details.startObserved===true,endObserved=details.endObserved===true;
     const collapsedBlockedGroups=Math.max(0,Number(details.collapsedBlockedGroups||0));
     let verdict='incomplete-pass';
-    if(endObserved)verdict=(missing.length||collapsedBlockedGroups||emptyPayload)?'needs-review':'observed-records-rechecked';
+    if(endObserved)verdict=(missing.length||collapsedBlockedGroups||emptyPayload||unknownAuthors)?'needs-review':'observed-records-rechecked';
     return {schema:'dm-archive-verification-v1',generatedAt:new Date().toISOString(),
       disclaimer:'Cross-checks the messages Discord displayed during two separate scroll passes. It cannot prove that all server-side messages were displayed or recover deleted or inaccessible content. Discord message IDs are not consecutive: numeric gaps do not prove messages are missing.',
       verdict,initialCount:expect.length,currentCount:known.length,
       secondPassRechecked:rechecked,notRechecked:missing.length,newlyRecovered:newIds.length,
-      unknownAuthors,emptyPayload,topReachedApparent:startObserved,bottomReachedApparent:endObserved,
+      unknownAuthors,unverifiedLegacy,attributedByHeader,attributedByAdjacentGroup,emptyPayload,topReachedApparent:startObserved,bottomReachedApparent:endObserved,
       collapsedBlockedGroups,fieldChanges:Math.max(0,Number(details.fieldChanges||0)),
       batchSize:size,batchCount:batches.length,batches,
       unrecheckedIdsSample:missing.slice(0,100),newlyRecoveredIdsSample:newIds.slice(0,100),
