@@ -29,7 +29,7 @@
     const startObserved=details.startObserved===true,endObserved=details.endObserved===true;
     const collapsedBlockedGroups=Math.max(0,Number(details.collapsedBlockedGroups||0));
     let verdict='incomplete-pass';
-    if(endObserved)verdict=(missing.length||collapsedBlockedGroups||emptyPayload||unknownAuthors)?'needs-review':'observed-records-rechecked';
+    if(endObserved&&startObserved)verdict=(missing.length||collapsedBlockedGroups||emptyPayload||unknownAuthors)?'needs-review':'observed-records-rechecked';
     return {schema:'dm-archive-verification-v1',generatedAt:new Date().toISOString(),
       disclaimer:'Cross-checks the messages Discord displayed during two separate scroll passes. It cannot prove that all server-side messages were displayed or recover deleted or inaccessible content. Discord message IDs are not consecutive: numeric gaps do not prove messages are missing.',
       verdict,initialCount:expect.length,currentCount:known.length,
