@@ -125,7 +125,7 @@ MIT License. See [LICENSE](LICENSE). Discord and its marks belong to their respe
 
 ---
 
-**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.7 (Discord-style HTML redesign; live Discord compatibility unverified)
+**Project:** [boormajor/discord-chat-export](https://github.com/boormajor/discord-chat-export) · **Version:** 2.8 (safe capture mode; live Discord compatibility unverified)
 
 ## v2.1 layout fix
 
@@ -198,3 +198,11 @@ The generated HTML now more closely resembles Discord Desktop DM chat: a dark na
 **Existing captures are preserved:** this is only an HTML renderer and popup version change. Replace the source in your **already installed** extension, click Reload on its card at `chrome://extensions`, refresh the Discord DM tab, and export **HTML** or **HTML + offline media ZIP** again. Previous HTML files do not update in place. Keep a JSON backup before changing the extension. Do not uninstall the old extension if you want to preserve browser-local history.
 
 **Limits:** This is an unofficial read-only recreation of Discord's chat appearance, not a functioning Discord app. Message contents, reactions, replies and attachments are limited to the information the capture engine actually recorded. Missing or unverified authors will remain labelled as such rather than inventing a sender. The HTML structure and exported sample underwent local syntax/smoke tests; this version was not tested against a live Discord conversation. Do not share private conversation archives publicly without permission.
+
+## v2.8 reliability and safe pacing
+
+This version prioritizes recording every **observed** message reliably over maximum scroll speed. The capture loop now uses smaller scroll steps (about 34% of the visible area, clamped between 110 and 340 pixels); waits at least 1.45 seconds per step; waits longer when the visible message IDs have not changed; pauses when the Discord tab is hidden; and checks the oldest **currently displayed** message ID, rather than the oldest item in the accumulated archive, when testing progress. At the apparent top it waits about 22 seconds and gently retries up to three times before stopping with an **incomplete / stalled** warning instead of claiming the entire chat was captured. The same conservative step size and waiting logic applies to the verification pass. Captured records are saved in batches about every five seconds; storage errors are retried. The audit must observe both apparent boundaries before it can label the re-observed records as checked.
+
+**Update safely:** Export your JSON backup first. Keep the existing extension installed, replace its files in the existing directory, click **Reload** in `chrome://extensions`, and refresh your Discord DM. Do not delete the original extension before backing up, since uninstalling can remove local capture storage. Keep the tab visible during capture or verification. Run the second-pass **Verify archive** option after capture, review unknown authors and batches that were not re-observed, and export the repaired HTML/JSON.
+
+**Limits:** No DOM-only tool can guarantee it saw messages that Discord never rendered, and this extension cannot recover deleted messages or reliably download all expired media. Verified batches mean their previously saved IDs appeared again in the browser, not that the server-side history was proven exhaustive. This release has syntax and deterministic utility tests, not a verified live Discord regression run.
