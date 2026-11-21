@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "DM Archive — Discord-style export",
-  "version": "2.6.0",
-  "description": "Local Discord DM exporter with message-specific author attribution, two-pass audit, and no tokens.",
+  "version": "2.7.0",
+  "description": "Discord-style local DM export with faithful chat layout, audit, media ZIP, and no tokens.",
   "permissions": [
     "storage",
     "unlimitedStorage"
