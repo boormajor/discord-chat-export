@@ -549,7 +549,20 @@
   for(const m of data.messages)if(/^\d{15,21}$/.test(m?.id||'')){
    if(!m.media&&Array.isArray(m.attachments))m.media=m.attachments.map(u=>({url:u,kind:mediaType(u),name:''}));
    const prev=state.records.get(m.id);
-   state.records.set(m.id,prev?{...m,...prev,media:mergeMedia(m.media,prev.media)}:m);
+   // Imported pre-v2.6 names may be guesses. Never reinstate them as verified.
+   const imported={...m};
+   if(!['same-message-header','adjacent-group'].includes(imported.authorSource)){
+     if(imported.author&&!imported.legacyAuthor)imported.legacyAuthor=imported.author;
+     imported.author=null;imported.avatar=null;imported.authorSource='unverified-legacy';
+   }
+   const merged=prev?{...imported,...prev,media:mergeMedia(imported.media||[],prev.media||[])}:imported;
+   // Preserve the strongest attribution; an older archive must not overwrite a
+   // corrected author, and an untrusted old record must not replace a trusted import.
+   if(trustedAuthor(imported)&&!trustedAuthor(prev)){
+     merged.author=imported.author;merged.avatar=imported.avatar;
+     merged.authorSource=imported.authorSource;
+   }
+   state.records.set(m.id,merged);
   }
   state.dirty=true;state.tallyDirty=true;state.verifyReport=null;await save();return {...status(),note:'Imported JSON messages.'};
  }
