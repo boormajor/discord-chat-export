@@ -15,7 +15,7 @@ function render(s){
   els.dot.className='dot'+(s.running?' active':s.phase==='complete'?' complete':s.phase==='paused'?' paused':'');
   els.count.textContent=Number(s.total||0).toLocaleString();
   els.mediaCount.textContent=Number(s.mediaCount||0).toLocaleString();
-  els.details.textContent='DM: '+s.dmId+' · '+(s.unknownAuthors||0)+' missing author labels';
+  els.details.textContent='DM: '+s.dmId+' · '+(s.unknownAuthors||0)+' unverified author labels';
   els.progress.textContent=s.progress||'Start auto capture and the page will scroll through the conversation.';
   els.start.textContent=s.running?'Auto-capturing…':s.phase==='complete'?'Scan again':s.phase==='paused'?'Resume auto capture':s.phase==='stalled'?'Retry capture':'Start auto capture';
   els.start.disabled=!!s.running||!!s.exporting;
