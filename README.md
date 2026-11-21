@@ -206,3 +206,7 @@ This version prioritizes recording every **observed** message reliably over maxi
 **Update safely:** Export your JSON backup first. Keep the existing extension installed, replace its files in the existing directory, click **Reload** in `chrome://extensions`, and refresh your Discord DM. Do not delete the original extension before backing up, since uninstalling can remove local capture storage. Keep the tab visible during capture or verification. Run the second-pass **Verify archive** option after capture, review unknown authors and batches that were not re-observed, and export the repaired HTML/JSON.
 
 **Limits:** No DOM-only tool can guarantee it saw messages that Discord never rendered, and this extension cannot recover deleted messages or reliably download all expired media. Verified batches mean their previously saved IDs appeared again in the browser, not that the server-side history was proven exhaustive. This release has syntax and deterministic utility tests, not a verified live Discord regression run.
+
+### Regression test command
+
+Run `node --test tests/pacing.test.js` from the repository root. The tests cover bounded scroll-step size, minimum render waits, rendered-window change detection, 200-message verification batches, and incomplete-pass reporting. They do not simulate Discord's real network or virtualized chat UI.
